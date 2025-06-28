@@ -1,0 +1,30 @@
+# Logs de compressão
+*.log
+pdf_compression_*.log
+
+# Diretórios de backup
+PDF_BACKUPS_*/
+backups/
+
+# Arquivos temporários
+*.tmp
+*.temp
+*.compressed
+
+# Diretórios de sistema
+.DS_Store
+Thumbs.db
+
+# Arquivos de teste locais
+test_pdfs/
+samples/
+
+# Configurações do editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Arquivos comprimidos temporários
+*.pdf.compressed
