@@ -4,7 +4,7 @@
 # Autor: Sistema automatizado
 
 # Configuracoes
-BASE_DIR="/var/www/html/data/mediaware77/files_versions/SFTP/SAD"
+BASE_DIR="$(pwd)"  # Padrao: diretorio atual
 BACKUP_DIR="${BASE_DIR}/PDF_BACKUPS_$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="${BASE_DIR}/pdf_compression_$(date +%Y%m%d_%H%M%S).log"
 MIN_DPI=200
@@ -25,6 +25,7 @@ COMPRESSED_FILES=0
 SKIPPED_FILES=0
 TOTAL_SIZE_BEFORE=0
 TOTAL_SIZE_AFTER=0
+DIRECTORIES_WITH_PDFS=0
 
 # Funcao de logging
 log_message() {
@@ -38,13 +39,14 @@ show_usage() {
     echo "Uso: $0 [opcoes]"
     echo ""
     echo "Opcoes:"
+    echo "  --path <diretorio> Diretorio base para buscar PDFs (padrao: diretorio atual)"
     echo "  --dry-run          Simular sem modificar arquivos"
     echo "  --min-dpi <valor>  DPI minimo para compressao (padrao: 200)"
     echo "  --quality <valor>  Qualidade: screen, ebook, printer, prepress (padrao: ebook)"
     echo "  --help             Mostrar esta ajuda"
     echo ""
     echo "Exemplo:"
-    echo "  $0 --dry-run --min-dpi 300 --quality screen"
+    echo "  $0 --path /caminho/documentos --dry-run --min-dpi 300 --quality screen"
 }
 
 # Funcao para obter DPI de um PDF
@@ -193,6 +195,7 @@ process_pdf() {
 show_report() {
     echo ""
     echo -e "${GREEN}=== RELATORIO FINAL ===${NC}"
+    echo -e "Diretorios analisados:   ${TOTAL_DIRS_WITH_PDFS:-0}"  
     echo -e "Arquivos encontrados:    ${TOTAL_FILES}"
     echo -e "Arquivos processados:    ${PROCESSED_FILES}"
     echo -e "Arquivos comprimidos:    ${COMPRESSED_FILES}"
@@ -227,6 +230,10 @@ trap cleanup SIGINT SIGTERM
 # Processar argumentos da linha de comando
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --path)
+            BASE_DIR="$2"
+            shift 2
+            ;;
         --dry-run)
             DRY_RUN=true
             shift
@@ -262,6 +269,19 @@ if [[ ! "$COMPRESS_QUALITY" =~ ^(screen|ebook|printer|prepress)$ ]]; then
     exit 1
 fi
 
+# Validar e normalizar BASE_DIR
+if [ ! -d "$BASE_DIR" ]; then
+    echo -e "${RED}ERRO: Diretorio nao encontrado: $BASE_DIR${NC}"
+    exit 1
+fi
+
+# Converter para caminho absoluto
+BASE_DIR="$(cd "$BASE_DIR" && pwd)"
+
+# Reconfigurar caminhos de backup e log baseados no BASE_DIR final
+BACKUP_DIR="${BASE_DIR}/PDF_BACKUPS_$(date +%Y%m%d_%H%M%S)"
+LOG_FILE="${BASE_DIR}/pdf_compression_$(date +%Y%m%d_%H%M%S).log"
+
 # Inicializar
 echo -e "${BLUE}=== COMPRESSOR DE PDFs ===${NC}"
 echo -e "Diretorio base:     $BASE_DIR"
@@ -293,12 +313,63 @@ fi
 log_message "Iniciando compressao de PDFs"
 log_message "Parametros: MIN_DPI=$MIN_DPI, QUALITY=$COMPRESS_QUALITY, DRY_RUN=$DRY_RUN"
 
-echo -e "${BLUE}Buscando arquivos PDF...${NC}"
+echo -e "${BLUE}Analisando estrutura de diretorios...${NC}"
+
+# Contar diretorios com PDFs (compativel com BSD e GNU find)
+# Redirecionar stderr para capturar erros de permissao
+FIND_ERRORS=$(mktemp)
+TOTAL_DIRS_WITH_PDFS=$(find "$BASE_DIR" -iname "*.pdf" -type f -exec dirname {} \; 2>"$FIND_ERRORS" | sort -u | wc -l)
+
+# Verificar se houve erros de permissao
+if [ -s "$FIND_ERRORS" ]; then
+    echo -e "${YELLOW}AVISO: Alguns diretorios nao puderam ser acessados (permissoes)${NC}"
+    log_message "Avisos de permissao durante busca: $(cat "$FIND_ERRORS" | wc -l) diretorios inacessiveis"
+fi
+rm -f "$FIND_ERRORS"
+
+if [ "$TOTAL_DIRS_WITH_PDFS" -gt 0 ]; then
+    echo -e "Encontrados PDFs em $TOTAL_DIRS_WITH_PDFS diretorios"
+    log_message "Estrutura: $TOTAL_DIRS_WITH_PDFS diretorios contem arquivos PDF"
+else
+    echo -e "${YELLOW}Nenhum arquivo PDF encontrado no diretorio especificado${NC}"
+    log_message "Nenhum PDF encontrado em: $BASE_DIR"
+    show_report
+    exit 0
+fi
+
+echo -e "${BLUE}Processando arquivos PDF...${NC}"
 
 # Processar todos os arquivos PDF
+CURRENT_DIR=""
+FIND_ERRORS_MAIN=$(mktemp)
+
 while IFS= read -r -d '' file; do
+    # Verificar se o arquivo ainda existe e e legivel
+    if [ ! -r "$file" ]; then
+        log_message "AVISO: Arquivo nao legivel ignorado: $file"
+        continue
+    fi
+    
+    # Mostrar progresso por diretorio
+    FILE_DIR=$(dirname "$file")
+    if [ "$FILE_DIR" != "$CURRENT_DIR" ]; then
+        CURRENT_DIR="$FILE_DIR"
+        ((DIRECTORIES_WITH_PDFS++))
+        # Mostrar caminho relativo se possivel
+        RELATIVE_DIR="${FILE_DIR#$BASE_DIR}"
+        [ "$RELATIVE_DIR" = "$FILE_DIR" ] && RELATIVE_DIR="$FILE_DIR" || RELATIVE_DIR="${RELATIVE_DIR#/}"
+        [ -z "$RELATIVE_DIR" ] && RELATIVE_DIR="." 
+        echo -e "${BLUE}Processando diretorio [$DIRECTORIES_WITH_PDFS/$TOTAL_DIRS_WITH_PDFS]: $RELATIVE_DIR${NC}"
+        log_message "Processando diretorio: $FILE_DIR"
+    fi
     process_pdf "$file"
-done < <(find "$BASE_DIR" -name "*.pdf*" -type f -print0)
+done < <(find "$BASE_DIR" -iname "*.pdf" -type f -print0 2>"$FIND_ERRORS_MAIN" | sort -z)
+
+# Verificar erros do find principal
+if [ -s "$FIND_ERRORS_MAIN" ]; then
+    log_message "Erros durante processamento: $(cat "$FIND_ERRORS_MAIN")"
+fi
+rm -f "$FIND_ERRORS_MAIN"
 
 # Exibir relatorio final
 show_report
