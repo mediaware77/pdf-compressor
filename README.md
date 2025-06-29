@@ -44,7 +44,7 @@ brew install ghostscript imagemagick poppler
 ### Download do Script
 
 ```bash
-wget https://github.com/seu-usuario/pdf-compressor/raw/main/compress_pdfs.sh
+wget https://github.com/mediaware77/pdf-compressor/raw/main/compress_pdfs.sh
 chmod +x compress_pdfs.sh
 ```
 
